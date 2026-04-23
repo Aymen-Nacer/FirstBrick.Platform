@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/src/Account/">
+    <Project Path="src/Account/FirstBrick.Account.Api/FirstBrick.Account.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/Investment/">
+    <Project Path="src/Investment/FirstBrick.Investment.Api/FirstBrick.Investment.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/Payment/">
+    <Project Path="src/Payment/FirstBrick.Payment.Api/FirstBrick.Payment.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/Portfolio/">
+    <Project Path="src/Portfolio/FirstBrick.Portfolio.Api/FirstBrick.Portfolio.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/Shared/">
+    <Project Path="src/Shared/FirstBrick.Shared/FirstBrick.Shared.csproj" />
+  </Folder>
+</Solution>

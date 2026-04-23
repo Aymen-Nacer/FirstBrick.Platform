@@ -1,0 +1,602 @@
+{
+  "info": {
+    "name": "FirstBrick",
+    "description": "End-to-end tests for the FirstBrick microservices: happy path + key edge cases (idempotency, atomic reservation, insufficient funds, JWT auth, IDOR, role enforcement).\n\nRun the whole collection via Runner with 'Delay' set to 0. Requires the stack to be running via `docker compose up --build -d` (or equivalent).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "account_url",    "value": "http://localhost:5001" },
+    { "key": "payment_url",    "value": "http://localhost:5002" },
+    { "key": "investment_url", "value": "http://localhost:5003" },
+    { "key": "portfolio_url",  "value": "http://localhost:5004" },
+    { "key": "password",       "value": "pass123" },
+    { "key": "owner_username", "value": "" },
+    { "key": "user_username",  "value": "" },
+    { "key": "owner_token",    "value": "" },
+    { "key": "user_token",     "value": "" },
+    { "key": "owner_id",       "value": "" },
+    { "key": "user_id",        "value": "" },
+    { "key": "project_id",     "value": "" },
+    { "key": "small_project_id", "value": "" },
+    { "key": "topup_key",      "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Setup",
+      "item": [
+        {
+          "name": "Register Alice (ProjectOwner)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const suffix = Date.now().toString(36);",
+                  "pm.collectionVariables.set('owner_username', 'alice_' + suffix);",
+                  "pm.collectionVariables.set('user_username', 'bob_' + suffix);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('role is ProjectOwner', () => pm.expect(body.role).to.eql('ProjectOwner'));",
+                  "pm.collectionVariables.set('owner_id', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{account_url}}/v1/user", "host": ["{{account_url}}"], "path": ["v1", "user"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{owner_username}}\",\n  \"password\": \"{{password}}\",\n  \"fullName\": \"Alice Owner\",\n  \"role\": \"ProjectOwner\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Register Bob (User)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('role is User', () => pm.expect(body.role).to.eql('User'));",
+                  "pm.collectionVariables.set('user_id', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{account_url}}/v1/user", "host": ["{{account_url}}"], "path": ["v1", "user"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{user_username}}\",\n  \"password\": \"{{password}}\",\n  \"fullName\": \"Bob Investor\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login Alice",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('accessToken present', () => pm.expect(body.accessToken).to.be.a('string'));",
+                  "pm.collectionVariables.set('owner_token', body.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{account_url}}/v1/login", "host": ["{{account_url}}"], "path": ["v1", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{owner_username}}\",\n  \"password\": \"{{password}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login Bob",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('user_token', pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{account_url}}/v1/login", "host": ["{{account_url}}"], "path": ["v1", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{user_username}}\",\n  \"password\": \"{{password}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Happy Path",
+      "item": [
+        {
+          "name": "Alice creates Project ($100,000)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('ownerId is Alice', () => pm.expect(body.ownerId).to.eql(pm.collectionVariables.get('owner_id')));",
+                  "pm.test('currentAmount is 0', () => pm.expect(body.currentAmount).to.eql(0));",
+                  "pm.collectionVariables.set('project_id', body.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{owner_token}}" }
+            ],
+            "url": { "raw": "{{investment_url}}/v1/project", "host": ["{{investment_url}}"], "path": ["v1", "project"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Downtown Loft\",\n  \"targetAmount\": 100000\n}"
+            }
+          }
+        },
+        {
+          "name": "Bob tops up $5,000 (Apple Pay)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('topup_key', 'topup-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Success TopUp', () => { pm.expect(body.type).to.eql('TopUp'); pm.expect(body.status).to.eql('Success'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{user_token}}" }
+            ],
+            "url": { "raw": "{{payment_url}}/v1/ApplepayTopup", "host": ["{{payment_url}}"], "path": ["v1", "ApplepayTopup"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 5000,\n  \"idempotencyKey\": \"{{topup_key}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Bob balance = $5,000",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('balance is 5000', () => pm.expect(pm.response.json().balance).to.eql(5000));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{user_token}}" }],
+            "url": { "raw": "{{payment_url}}/v1/balance", "host": ["{{payment_url}}"], "path": ["v1", "balance"] }
+          }
+        },
+        {
+          "name": "Bob invests $1,000 (async)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('status Pending', () => pm.expect(pm.response.json().status).to.eql('Pending'));",
+                  "// Busy-wait ~1.5s so RabbitMQ pipeline completes before next assertions.",
+                  "const end = Date.now() + 1500;",
+                  "while (Date.now() < end) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{user_token}}" }
+            ],
+            "url": { "raw": "{{investment_url}}/v1/invest", "host": ["{{investment_url}}"], "path": ["v1", "invest"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{project_id}}\",\n  \"amount\": 1000\n}"
+            }
+          }
+        },
+        {
+          "name": "Bob balance = $4,000 (debited)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('balance is 4000', () => pm.expect(pm.response.json().balance).to.eql(4000));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{user_token}}" }],
+            "url": { "raw": "{{payment_url}}/v1/balance", "host": ["{{payment_url}}"], "path": ["v1", "balance"] }
+          }
+        },
+        {
+          "name": "Bob portfolio has 1 entry ($1,000)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const list = pm.response.json();",
+                  "pm.test('1 entry', () => pm.expect(list).to.have.lengthOf(1));",
+                  "pm.test('totalInvested is 1000', () => pm.expect(list[0].totalInvested).to.eql(1000));",
+                  "pm.test('projectTitle is Downtown Loft', () => pm.expect(list[0].projectTitle).to.eql('Downtown Loft'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{user_token}}" }],
+            "url": { "raw": "{{portfolio_url}}/v1/portfolio", "host": ["{{portfolio_url}}"], "path": ["v1", "portfolio"] }
+          }
+        },
+        {
+          "name": "Bob has 2 transactions (TopUp + Investment)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const page = pm.response.json();",
+                  "pm.test('total is 2', () => pm.expect(page.total).to.eql(2));",
+                  "const types = page.items.map(t => t.type).sort();",
+                  "pm.test('has Investment + TopUp', () => pm.expect(types).to.eql(['Investment', 'TopUp']));",
+                  "const allSuccess = page.items.every(t => t.status === 'Success');",
+                  "pm.test('both Success', () => pm.expect(allSuccess).to.be.true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{user_token}}" }],
+            "url": { "raw": "{{payment_url}}/v1/transactions", "host": ["{{payment_url}}"], "path": ["v1", "transactions"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Edge Cases",
+      "item": [
+        {
+          "name": "Idempotent TopUp (same key twice)",
+          "description": "Re-sends the previous topup_key. Server must return the original transaction; balance must NOT double-increase.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK (idempotent)', () => pm.response.to.have.status(200));",
+                  "pm.test('type is TopUp', () => pm.expect(pm.response.json().type).to.eql('TopUp'));",
+                  "// Verify balance is still 4000 (no double credit).",
+                  "pm.sendRequest({",
+                  "  url: pm.collectionVariables.get('payment_url') + '/v1/balance',",
+                  "  method: 'GET',",
+                  "  header: { 'Authorization': 'Bearer ' + pm.collectionVariables.get('user_token') }",
+                  "}, (_, res) => {",
+                  "  pm.test('balance unchanged at 4000', () => pm.expect(res.json().balance).to.eql(4000));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{user_token}}" }
+            ],
+            "url": { "raw": "{{payment_url}}/v1/ApplepayTopup", "host": ["{{payment_url}}"], "path": ["v1", "ApplepayTopup"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 5000,\n  \"idempotencyKey\": \"{{topup_key}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Alice creates $500 project (for capacity test)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('small_project_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{owner_token}}" }
+            ],
+            "url": { "raw": "{{investment_url}}/v1/project", "host": ["{{investment_url}}"], "path": ["v1", "project"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Small Project\",\n  \"targetAmount\": 500\n}"
+            }
+          }
+        },
+        {
+          "name": "Bob invests $400 (fits)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{user_token}}" }
+            ],
+            "url": { "raw": "{{investment_url}}/v1/invest", "host": ["{{investment_url}}"], "path": ["v1", "invest"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{small_project_id}}\",\n  \"amount\": 400\n}"
+            }
+          }
+        },
+        {
+          "name": "Bob invests $400 again (EXCEEDS capacity)",
+          "description": "Atomic capacity check: CurrentAmount(400) + 400 > TargetAmount(500). Must return 409 Conflict. Project's CurrentAmount must stay at 400.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('error mentions capacity', () => pm.expect(JSON.stringify(pm.response.json())).to.match(/capacity/i));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{user_token}}" }
+            ],
+            "url": { "raw": "{{investment_url}}/v1/invest", "host": ["{{investment_url}}"], "path": ["v1", "invest"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{small_project_id}}\",\n  \"amount\": 400\n}"
+            }
+          }
+        },
+        {
+          "name": "Bob tries to invest $999,999 (insufficient funds)",
+          "description": "Reservation succeeds (capacity OK for the big project) but Payment consumer detects insufficient funds, publishes PaymentFailed, Investment releases the reservation.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "// Wait for async failure + rollback.",
+                  "const end = Date.now() + 1500;",
+                  "while (Date.now() < end) {}",
+                  "// Balance should still be 4000 (nothing debited).",
+                  "pm.sendRequest({",
+                  "  url: pm.collectionVariables.get('payment_url') + '/v1/balance',",
+                  "  method: 'GET',",
+                  "  header: { 'Authorization': 'Bearer ' + pm.collectionVariables.get('user_token') }",
+                  "}, (_, res) => {",
+                  "  pm.test('balance unchanged', () => pm.expect(res.json().balance).to.eql(4000));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{user_token}}" }
+            ],
+            "url": { "raw": "{{investment_url}}/v1/invest", "host": ["{{investment_url}}"], "path": ["v1", "invest"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"projectId\": \"{{project_id}}\",\n  \"amount\": 999999\n}"
+            }
+          }
+        },
+        {
+          "name": "401 — no token on protected endpoint",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{portfolio_url}}/v1/portfolio", "host": ["{{portfolio_url}}"], "path": ["v1", "portfolio"] }
+          }
+        },
+        {
+          "name": "403 — Bob tries to read Alice's profile (IDOR)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{user_token}}" }],
+            "url": { "raw": "{{account_url}}/v1/user/{{owner_id}}", "host": ["{{account_url}}"], "path": ["v1", "user", "{{owner_id}}"] }
+          }
+        },
+        {
+          "name": "403 — Bob (role=User) tries to create a project",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{user_token}}" }
+            ],
+            "url": { "raw": "{{investment_url}}/v1/project", "host": ["{{investment_url}}"], "path": ["v1", "project"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Bob's Project\",\n  \"targetAmount\": 1000\n}"
+            }
+          }
+        },
+        {
+          "name": "409 — duplicate username",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{account_url}}/v1/user", "host": ["{{account_url}}"], "path": ["v1", "user"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{user_username}}\",\n  \"password\": \"pass123\",\n  \"fullName\": \"Dup\"\n}"
+            }
+          }
+        },
+        {
+          "name": "401 — wrong password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{account_url}}/v1/login", "host": ["{{account_url}}"], "path": ["v1", "login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{user_username}}\",\n  \"password\": \"wrong-password\"\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

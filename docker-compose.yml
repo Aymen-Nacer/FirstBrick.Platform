@@ -1,0 +1,112 @@
+x-service-env: &service-env
+  Jwt__Issuer: firstbrick
+  Jwt__Audience: firstbrick
+  Jwt__Secret: dev-super-secret-key-change-me-please-32bytes-min
+  Jwt__ExpiryMinutes: "120"
+  RabbitMq__Host: rabbitmq
+  RabbitMq__VirtualHost: /
+  RabbitMq__Username: guest
+  RabbitMq__Password: guest
+  ASPNETCORE_ENVIRONMENT: Development
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: firstbrick-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: firstbrick-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  account:
+    build:
+      context: .
+      args:
+        PROJECT: Account
+    container_name: firstbrick-account
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *service-env
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=firstbrick_account;Username=postgres;Password=postgres
+    ports:
+      - "5001:8080"
+
+  payment:
+    build:
+      context: .
+      args:
+        PROJECT: Payment
+    container_name: firstbrick-payment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      <<: *service-env
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=firstbrick_payment;Username=postgres;Password=postgres
+    ports:
+      - "5002:8080"
+
+  investment:
+    build:
+      context: .
+      args:
+        PROJECT: Investment
+    container_name: firstbrick-investment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      <<: *service-env
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=firstbrick_investment;Username=postgres;Password=postgres
+    ports:
+      - "5003:8080"
+
+  portfolio:
+    build:
+      context: .
+      args:
+        PROJECT: Portfolio
+    container_name: firstbrick-portfolio
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      <<: *service-env
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=firstbrick_portfolio;Username=postgres;Password=postgres
+    ports:
+      - "5004:8080"
+
+volumes:
+  postgres_data:
